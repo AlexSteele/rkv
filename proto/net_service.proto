@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package rkv;
+
+import "config.proto";
+import "rkv_service.proto";
+
+// Service interface for peer to peer network management between RKV nodes
+service NetService {
+    rpc JoinNetwork(JoinNetworkRequest) returns (JoinNetworkResponse) {}
+    rpc LeaveNetwork(LeaveNetworkRequest) returns (LeaveNetworkResponse) {}
+    rpc Gossip(GossipRequest) returns (GossipResponse) {}
+    rpc Heartbeat (HeartbeatRequest) returns (HeartbeatResponse) {}
+}
+
+message JoinNetworkRequest {
+    string node_address = 1;
+}
+
+message JoinNetworkResponse {
+    ClusterConfig cluster_config = 1;
+    Gossip gossip = 2;
+}
+
+message LeaveNetworkRequest {
+    string node_address = 1;
+}
+
+message LeaveNetworkResponse { }
+
+enum GossipType {
+    NOTIFY_NODE_JOINED = 0;
+    NOTIFY_NODE_UNAVAILABLE = 1;
+    NOTIFY_NODE_LEFT = 2;
+    SHARE_FULL_NETWORK = 3;
+}
+
+enum NodeStatus {
+    ONLINE = 0;
+    UNAVAILABLE = 1;
+    LEFT_NETWORK = 2;
+}
+
+message NodeInfo {
+    string address = 1;
+    NodeStatus status = 2;
+}
+
+message Gossip {
+    GossipType type = 1;
+    repeated NodeInfo nodes = 2;
+}
+
+message GossipRequest {
+    Gossip gossip = 1;
+}
+
+message GossipResponse {
+    Gossip gossip = 1;
+}

@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package rkv;
+
+// Configuration for an rkv cluster
+message ClusterConfig {
+
+    // User assigned cluster name
+    string name = 1;
+
+    // Replication factor or 'N'
+    int32 replication_factor = 2;
+
+    // Replicas required for a successful read or 'R'
+    int32 read_replicas = 3;
+
+    // Replicas required for a successful write or 'W'
+    int32 write_replicas = 4;
+
+    // Hash ring replicas per node
+    int32 ring_replicas = 5;
+}

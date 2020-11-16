@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package rkv;
+
+import "rkv_service.proto";
+
+// Storage interface for peer to peer or client coordinated requests.
+service StorageService {
+   rpc DirectPut(PutRequest) returns (PutResponse) {}
+   rpc DirectGet(GetRequest) returns (GetResponse) {}
+   rpc DirectDelete(DeleteRequest) returns (DeleteResponse) {}
+   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse) {}
+}

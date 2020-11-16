@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package rkv;
+
+import "config.proto";
+
+// Client facing interface for an rkv storage node
+service RkvService {
+
+    // Returns cluster information
+    rpc DescribeCluster(DescribeClusterRequest) returns (DescribeClusterResponse) {}
+
+    // Stores a value for a key
+    rpc Put(PutRequest) returns (PutResponse) {}
+
+    // Gets the current value for a key
+    rpc Get(GetRequest) returns (GetResponse) {}
+
+    // Deletes a key/value pair
+    rpc Delete(DeleteRequest) returns (DeleteResponse) {}
+
+    // Checks if the node is online
+    rpc Heartbeat (HeartbeatRequest) returns (HeartbeatResponse) {}
+}
+
+message DescribeClusterRequest { }
+message DescribeClusterResponse {
+    ClusterConfig cluster_config = 1;
+}
+
+message PutRequest {
+    bytes key = 1;     // Non-empty
+    bytes value = 2;   // Non-empty
+    int64 version = 3; // Optional
+}
+
+message PutResponse {
+    int64 version = 1; // User or server assigned version
+}
+
+message GetRequest {
+    bytes key = 1;
+}
+
+message GetResponse {
+   bytes value = 1; // Empty if not present
+   int64 version = 2;
+}
+
+message DeleteRequest {
+    bytes key = 1;
+}
+
+message DeleteResponse {
+    bytes value = 1; // Empty if not present
+}
+
+message HeartbeatRequest {}
+message HeartbeatResponse {}
