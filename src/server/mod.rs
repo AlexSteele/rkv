@@ -1,2 +1,5 @@
+mod error;
 mod server;
-pub use server::{NodeAddr, Server, Config};
+
+pub use error::{Error, Result};
+pub use server::{Config, NodeAddr, Server};
