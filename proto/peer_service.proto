@@ -5,8 +5,12 @@ package rkv;
 import "config.proto";
 import "rkv_service.proto";
 
-// Service interface for peer to peer network management between RKV nodes
-service NetService {
+// Service interface for peer to peer communcation between RKV nodes
+service PeerService {
+    rpc DescribeCluster(DescribeClusterRequest) returns (DescribeClusterResponse) {}
+    rpc DirectPut(PutRequest) returns (PutResponse) {}
+    rpc DirectGet(GetRequest) returns (GetResponse) {}
+    rpc DirectDelete(DeleteRequest) returns (DeleteResponse) {}
     rpc JoinNetwork(JoinNetworkRequest) returns (JoinNetworkResponse) {}
     rpc LeaveNetwork(LeaveNetworkRequest) returns (LeaveNetworkResponse) {}
     rpc Gossip(GossipRequest) returns (GossipResponse) {}
