@@ -2,6 +2,7 @@
 extern crate quick_error;
 
 pub mod client;
+pub(crate) mod error;
 pub mod ring;
 pub mod server;
 pub mod store;

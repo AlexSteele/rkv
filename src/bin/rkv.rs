@@ -1,9 +1,9 @@
 use log::*;
-use rkv::proto::rkv_service_server::RkvServiceServer;
 use rkv::proto::peer_service_server::PeerServiceServer;
-use rkv::server::{Config, State, RkvService, PeerService};
-use tokio::prelude::*;
+use rkv::proto::rkv_service_server::RkvServiceServer;
+use rkv::server::{Config, PeerService, RkvService, State};
 use std::sync::Arc;
+use tokio::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

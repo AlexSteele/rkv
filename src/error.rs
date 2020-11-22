@@ -1,10 +1,6 @@
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Bootstrap(message: String) {
-            from()
-            display("bootstrap error: {}", message)
-        }
         Io(err: std::io::Error) {
             from()
             source(err)

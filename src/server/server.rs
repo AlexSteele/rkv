@@ -1,14 +1,13 @@
-use super::{Error, Result};
+use crate::error::Result;
 use crate::proto;
-use crate::proto::rkv_service_server::RkvServiceServer;
 use crate::proto::ClusterConfig;
 use crate::store;
-use crate::{Key, Value};
-use log::{trace};
+use crate::Key;
+use log::trace;
 use std::sync::Arc;
 use tonic;
 
-// host:port
+// RKV node address. host:port
 pub type NodeAddr = String;
 
 #[derive(Debug, Clone)]
@@ -33,7 +32,7 @@ impl Config {
 // State shared between RkvService/PeerService
 pub struct State {
     config: Config,
-    store: Box<dyn store::Store>
+    store: Box<dyn store::Store>,
 }
 impl State {
     pub fn new(config: Config) -> Self {
@@ -45,7 +44,7 @@ impl State {
 }
 
 pub struct RkvService {
-    state: Arc<State>
+    state: Arc<State>,
 }
 impl RkvService {
     pub fn new(state: Arc<State>) -> Self {
@@ -54,13 +53,14 @@ impl RkvService {
 }
 
 pub struct PeerService {
-    state: Arc<State>
+    state: Arc<State>,
 }
 impl PeerService {
     pub fn new(state: Arc<State>) -> Self {
         Self { state }
     }
 }
+
 
 #[tonic::async_trait]
 impl proto::rkv_service_server::RkvService for RkvService {
@@ -80,7 +80,8 @@ impl proto::rkv_service_server::RkvService for RkvService {
     ) -> std::result::Result<tonic::Response<proto::PutResponse>, tonic::Status> {
         trace!("put");
         let req = request.into_inner();
-        self.state.store
+        self.state
+            .store
             .put(Key(req.key), req.value)
             .map(|version| tonic::Response::new(proto::PutResponse { version }))
             .map_err(|e| tonic::Status::new(tonic::Code::Internal, "storage error"))
@@ -92,7 +93,9 @@ impl proto::rkv_service_server::RkvService for RkvService {
     ) -> std::result::Result<tonic::Response<proto::GetResponse>, tonic::Status> {
         trace!("get");
         let req = request.into_inner();
-        let result = self.state.store
+        let result = self
+            .state
+            .store
             .get(&Key(req.key))
             .map_err(|e| tonic::Status::new(tonic::Code::Internal, "storage error"))?;
         let (value, version) = result.unwrap_or((Vec::new(), -1));
@@ -105,7 +108,9 @@ impl proto::rkv_service_server::RkvService for RkvService {
     ) -> std::result::Result<tonic::Response<proto::DeleteResponse>, tonic::Status> {
         trace!("delete");
         let req = request.into_inner();
-        let result = self.state.store
+        let result = self
+            .state
+            .store
             .delete(&Key(req.key))
             .map_err(|e| tonic::Status::new(tonic::Code::Internal, "storage error"))?;
         let (value, version) = result.unwrap_or((Vec::new(), -1));
