@@ -1,9 +1,8 @@
 use log::*;
 use rkv::proto::peer_service_server::PeerServiceServer;
 use rkv::proto::rkv_service_server::RkvServiceServer;
-use rkv::server::{Config, PeerService, RkvService, State};
+use rkv::server::{Config, PeerService, RkvService, Server};
 use std::sync::Arc;
-use tokio::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -15,9 +14,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = Config::from_args()?;
     let addr = config.address.parse()?;
-    let state = Arc::new(State::new(config));
-    let rkv_service = RkvService::new(state.clone());
-    let peer_service = PeerService::new(state);
+    let server = Arc::new(Server::new(config));
+    let rkv_service = RkvService {
+        server: server.clone(),
+    };
+    let peer_service = PeerService { server: server };
 
     info!("starting rkv server at {}", addr);
 

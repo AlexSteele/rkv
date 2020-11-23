@@ -1,9 +1,12 @@
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::proto;
+use crate::proto::peer_service_client::PeerServiceClient;
 use crate::proto::ClusterConfig;
+use crate::ring::HashRing;
 use crate::store;
-use crate::Key;
+use crate::{Key, Version};
 use log::trace;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tonic;
 
@@ -29,159 +32,244 @@ impl Config {
     }
 }
 
-// State shared between RkvService/PeerService
-pub struct State {
+pub struct Server {
     config: Config,
+    ring: HashRing<NodeAddr>,
     store: Box<dyn store::Store>,
 }
-impl State {
+
+// TODO: Parallelize put/get/delete
+impl Server {
     pub fn new(config: Config) -> Self {
         Self {
+            ring: Self::make_ring(&config),
             config: config,
             store: Box::new(store::MemStore::new()),
         }
     }
-}
 
-pub struct RkvService {
-    state: Arc<State>,
-}
-impl RkvService {
-    pub fn new(state: Arc<State>) -> Self {
-        Self { state }
+    // TODO: Fetch peers from network
+    fn make_ring(config: &Config) -> HashRing<NodeAddr> {
+        let mut ring = HashRing::new(config.cluster_config.ring_replicas);
+        ring.insert(config.address.clone());
+        for peer in &config.seed_nodes {
+            ring.insert(peer.clone());
+        }
+        ring
     }
-}
 
-pub struct PeerService {
-    state: Arc<State>,
-}
-impl PeerService {
-    pub fn new(state: Arc<State>) -> Self {
-        Self { state }
-    }
-}
-
-
-#[tonic::async_trait]
-impl proto::rkv_service_server::RkvService for RkvService {
-    async fn describe_cluster(
+    pub async fn describe_cluster(
         &self,
-        request: tonic::Request<proto::DescribeClusterRequest>,
-    ) -> std::result::Result<tonic::Response<proto::DescribeClusterResponse>, tonic::Status> {
-        trace!("describe_cluster");
-        Ok(tonic::Response::new(proto::DescribeClusterResponse {
-            cluster_config: Some(self.state.config.cluster_config.clone()),
-        }))
+        req: proto::DescribeClusterRequest,
+    ) -> Result<proto::DescribeClusterResponse> {
+        Ok(proto::DescribeClusterResponse {
+            cluster_config: Some(self.config.cluster_config.clone()),
+        })
     }
 
-    async fn put(
-        &self,
-        request: tonic::Request<proto::PutRequest>,
-    ) -> std::result::Result<tonic::Response<proto::PutResponse>, tonic::Status> {
-        trace!("put");
-        let req = request.into_inner();
-        self.state
-            .store
+    // TODO: Assign version if not given
+    // TODO: Retry failed puts/hinted handoff
+    pub async fn put(&self, req: proto::PutRequest) -> Result<proto::PutResponse> {
+        self.check_key(&req.key)?;
+
+        let replication_factor = self.config.cluster_config.replication_factor as usize;
+        let replicas: Vec<_> = self
+            .ring
+            .successors(&req.key)
+            .take(replication_factor)
+            .cloned()
+            .collect();
+
+        if replicas.len() < replication_factor {
+            return Err(Error::TooFewReplicas);
+        }
+
+        let mut results = Vec::new();
+        for addr in replicas {
+            results.push(self.remote_put(addr, req.clone()).await);
+        }
+
+        let (successes, failures): (Vec<_>, Vec<_>) =
+            results.iter().partition(|result| result.is_ok());
+
+        for result in failures {
+            trace!("put error: {:?}", result);
+        }
+
+        let write_replicas = self.config.cluster_config.write_replicas as usize;
+        if successes.len() < write_replicas {
+            return Err(Error::TooFewReplicas);
+        }
+
+        Ok(proto::PutResponse { version: -1 })
+    }
+
+    pub async fn get(&self, req: proto::GetRequest) -> Result<proto::GetResponse> {
+        self.check_key(&req.key)?;
+
+        let replication_factor = self.config.cluster_config.replication_factor as usize;
+        let replicas: Vec<_> = self
+            .ring
+            .successors(&req.key)
+            .take(replication_factor)
+            .cloned()
+            .collect();
+
+        if replicas.len() < replication_factor {
+            return Err(Error::TooFewReplicas);
+        }
+
+        let mut results = Vec::new();
+        for addr in replicas {
+            results.push(self.remote_get(addr, req.clone()).await);
+        }
+
+        let (successes, failures): (Vec<_>, Vec<_>) =
+            results.iter().partition(|result| result.is_ok());
+
+        for result in failures {
+            trace!("get error: {:?}", result);
+        }
+
+        // Find the most frequent version
+        let mut version_counts: HashMap<Version, i32> = HashMap::new();
+        for result in &successes {
+            let count = version_counts
+                .entry(result.as_ref().unwrap().version)
+                .or_insert(0);
+            *count += 1;
+        }
+        let (version, count) = version_counts
+            .iter()
+            .max_by_key(|(version, count)| (*count, *version))
+            .map(|(version, count)| (*version, *count))
+            .unwrap_or((-1, -1));
+
+        let read_replicas = self.config.cluster_config.write_replicas;
+        if count < read_replicas {
+            return Err(Error::TooFewReplicas);
+        }
+
+        let response = successes
+            .iter()
+            .map(|result| result.as_ref().unwrap())
+            .find(|response| response.version == version)
+            .expect("no matching response");
+
+        Ok(response.clone())
+    }
+
+    // TODO: Retry failed deletes
+    pub async fn delete(&self, req: proto::DeleteRequest) -> Result<proto::DeleteResponse> {
+        self.check_key(&req.key)?;
+
+        let replication_factor = self.config.cluster_config.replication_factor as usize;
+        let replicas: Vec<_> = self
+            .ring
+            .successors(&req.key)
+            .take(replication_factor)
+            .cloned()
+            .collect();
+
+        let mut results = Vec::new();
+        for addr in replicas {
+            results.push(self.remote_delete(addr, req.clone()).await);
+        }
+
+        let (successes, failures): (Vec<_>, Vec<_>) =
+            results.iter().partition(|result| result.is_ok());
+
+        for result in failures {
+            trace!("delete error: {:?}", result);
+        }
+
+        let write_replicas = self.config.cluster_config.write_replicas as usize;
+        if successes.len() < write_replicas {
+            return Err(Error::TooFewReplicas);
+        }
+
+        // TODO: return val
+        Ok(proto::DeleteResponse { value: Vec::new() })
+    }
+
+    pub async fn direct_put(&self, req: proto::PutRequest) -> Result<proto::PutResponse> {
+        self.check_key(&req.key)?;
+        self.store
             .put(Key(req.key), req.value)
-            .map(|version| tonic::Response::new(proto::PutResponse { version }))
-            .map_err(|e| tonic::Status::new(tonic::Code::Internal, "storage error"))
+            .map(|version| proto::PutResponse { version })
     }
 
-    async fn get(
-        &self,
-        request: tonic::Request<proto::GetRequest>,
-    ) -> std::result::Result<tonic::Response<proto::GetResponse>, tonic::Status> {
-        trace!("get");
-        let req = request.into_inner();
-        let result = self
-            .state
-            .store
+    pub async fn direct_get(&self, req: proto::GetRequest) -> Result<proto::GetResponse> {
+        self.check_key(&req.key)?;
+        self.store
             .get(&Key(req.key))
-            .map_err(|e| tonic::Status::new(tonic::Code::Internal, "storage error"))?;
-        let (value, version) = result.unwrap_or((Vec::new(), -1));
-        Ok(tonic::Response::new(proto::GetResponse { value, version }))
+            .map(|result| result.unwrap_or((Vec::new(), -1)))
+            .map(|(value, version)| proto::GetResponse { value, version })
     }
 
-    async fn delete(
-        &self,
-        request: tonic::Request<proto::DeleteRequest>,
-    ) -> std::result::Result<tonic::Response<proto::DeleteResponse>, tonic::Status> {
-        trace!("delete");
-        let req = request.into_inner();
-        let result = self
-            .state
-            .store
+    pub async fn direct_delete(&self, req: proto::DeleteRequest) -> Result<proto::DeleteResponse> {
+        self.check_key(&req.key)?;
+        self.store
             .delete(&Key(req.key))
-            .map_err(|e| tonic::Status::new(tonic::Code::Internal, "storage error"))?;
-        let (value, version) = result.unwrap_or((Vec::new(), -1));
-        Ok(tonic::Response::new(proto::DeleteResponse { value }))
+            .map(|result| result.unwrap_or((Vec::new(), -1)))
+            .map(|(value, version)| proto::DeleteResponse { value })
     }
 
-    async fn heartbeat(
+    pub async fn heartbeat(
         &self,
-        request: tonic::Request<proto::HeartbeatRequest>,
-    ) -> std::result::Result<tonic::Response<proto::HeartbeatResponse>, tonic::Status> {
-        trace!("heartbeat");
-        Ok(tonic::Response::new(proto::HeartbeatResponse {}))
-    }
-}
-
-#[tonic::async_trait]
-impl proto::peer_service_server::PeerService for PeerService {
-    async fn describe_cluster(
-        &self,
-        request: tonic::Request<proto::DescribeClusterRequest>,
-    ) -> std::result::Result<tonic::Response<proto::DescribeClusterResponse>, tonic::Status> {
-        todo!();
+        req: proto::HeartbeatRequest,
+    ) -> Result<proto::HeartbeatResponse> {
+        Ok(proto::HeartbeatResponse {})
     }
 
-    async fn direct_put(
+    async fn remote_put(
         &self,
-        request: tonic::Request<proto::PutRequest>,
-    ) -> std::result::Result<tonic::Response<proto::PutResponse>, tonic::Status> {
-        todo!();
+        addr: NodeAddr,
+        req: proto::PutRequest,
+    ) -> Result<proto::PutResponse> {
+        if addr == self.config.address {
+            return self.direct_put(req).await;
+        }
+
+        let mut client = PeerServiceClient::connect(addr).await?;
+        let resp = client.direct_put(req).await?;
+        Ok(resp.into_inner())
     }
 
-    async fn direct_get(
+    async fn remote_get(
         &self,
-        request: tonic::Request<proto::GetRequest>,
-    ) -> std::result::Result<tonic::Response<proto::GetResponse>, tonic::Status> {
-        todo!();
+        addr: NodeAddr,
+        req: proto::GetRequest,
+    ) -> Result<proto::GetResponse> {
+        if addr == self.config.address {
+            return self.direct_get(req).await;
+        }
+
+        let mut client = PeerServiceClient::connect(addr).await?;
+        let resp = client.direct_get(req).await?;
+        Ok(resp.into_inner())
     }
 
-    async fn direct_delete(
+    async fn remote_delete(
         &self,
-        request: tonic::Request<proto::DeleteRequest>,
-    ) -> std::result::Result<tonic::Response<proto::DeleteResponse>, tonic::Status> {
-        todo!();
+        addr: NodeAddr,
+        req: proto::DeleteRequest,
+    ) -> Result<proto::DeleteResponse> {
+        if addr == self.config.address {
+            return self.direct_delete(req).await;
+        }
+
+        let mut client = PeerServiceClient::connect(addr).await?;
+        let resp = client.direct_delete(req).await?;
+        Ok(resp.into_inner())
     }
 
-    async fn join_network(
-        &self,
-        request: tonic::Request<proto::JoinNetworkRequest>,
-    ) -> std::result::Result<tonic::Response<proto::JoinNetworkResponse>, tonic::Status> {
-        todo!();
-    }
-
-    async fn leave_network(
-        &self,
-        request: tonic::Request<proto::LeaveNetworkRequest>,
-    ) -> std::result::Result<tonic::Response<proto::LeaveNetworkResponse>, tonic::Status> {
-        todo!();
-    }
-
-    async fn gossip(
-        &self,
-        request: tonic::Request<proto::GossipRequest>,
-    ) -> std::result::Result<tonic::Response<proto::GossipResponse>, tonic::Status> {
-        todo!();
-    }
-
-    async fn heartbeat(
-        &self,
-        request: tonic::Request<proto::HeartbeatRequest>,
-    ) -> std::result::Result<tonic::Response<proto::HeartbeatResponse>, tonic::Status> {
-        todo!();
+    fn check_key(&self, key: &Vec<u8>) -> Result<()> {
+        if key.is_empty() {
+            Err(Error::InvalidArgument("empty key".to_string()))
+        } else {
+            Ok(())
+        }
     }
 }
 

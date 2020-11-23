@@ -1,6 +1,9 @@
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
+        InvalidArgument(msg: String) {
+            display("invalid argument: {}", msg)
+        }
         Io(err: std::io::Error) {
             from()
             source(err)
@@ -14,7 +17,8 @@ quick_error! {
             from()
             display("{}", err)
         }
-        Other(err: Box<dyn std::error::Error>) {
+        TooFewReplicas {}
+        Other(err: Box<dyn std::error::Error + Send + Sync + 'static>) {
             from()
             source(err.as_ref())
             display("{:?}", err)
