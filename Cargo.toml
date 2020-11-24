@@ -12,6 +12,7 @@ quick-error = "2.0"
 tonic = "0.3"
 prost = "0.6"
 stderrlog = "0.5"
+structopt = "0.3"
 tokio = { version = "0.2", features = ["full"] }
 
 [build-dependencies]

@@ -12,7 +12,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init()
         .unwrap();
 
-    let config = Config::from_args()?;
+    let config = Config::parse_from_args();
     let addr = config.address.parse()?;
     let server = Arc::new(Server::new(config));
     let rkv_service = RkvService {

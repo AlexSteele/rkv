@@ -7,28 +7,48 @@ use crate::store;
 use crate::{Key, Version};
 use log::trace;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::path::PathBuf;
+use structopt::StructOpt;
 use tonic;
 
 // RKV node address. host:port
 pub type NodeAddr = String;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, StructOpt)]
 pub struct Config {
-    pub folder: String,
+    #[structopt(short, long, default_value = "")]
+    pub folder: PathBuf,
+
+    #[structopt(short, long, default_value = "127.0.0.1:8080")]
     pub address: NodeAddr,
+
+    #[structopt(short, long, use_delimiter = true, default_value = "")]
     pub seed_nodes: Vec<NodeAddr>,
+
+    #[structopt(short, long, parse(try_from_str = parse_cluster_config), default_value = "")]
     pub cluster_config: ClusterConfig,
 }
 impl Config {
-    pub fn from_args() -> Result<Config> {
-        // TODO: parse
-        Ok(Config {
-            folder: "".to_string(),
-            address: "127.0.0.1:8080".to_string(),
-            seed_nodes: Vec::new(),
-            cluster_config: default_cluster_config(),
-        })
+    pub fn parse_from_args() -> Self {
+        Self::from_args()
+    }
+}
+
+fn parse_cluster_config(src: &str) -> std::result::Result<ClusterConfig, String> {
+    if src.is_empty() {
+        return Ok(default_cluster_config());
+    }
+    // TODO: Load from file
+    unimplemented!();
+}
+
+fn default_cluster_config() -> ClusterConfig {
+    ClusterConfig {
+        name: "default".to_string(),
+        replication_factor: 3,
+        read_replicas: 2,
+        write_replicas: 2,
+        ring_replicas: 8,
     }
 }
 
@@ -263,15 +283,5 @@ impl Server {
         } else {
             Ok(())
         }
-    }
-}
-
-pub fn default_cluster_config() -> ClusterConfig {
-    ClusterConfig {
-        name: "default".to_string(),
-        replication_factor: 3,
-        read_replicas: 2,
-        write_replicas: 2,
-        ring_replicas: 8,
     }
 }
