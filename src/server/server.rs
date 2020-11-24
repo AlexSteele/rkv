@@ -72,17 +72,7 @@ impl Server {
     pub async fn put(&self, req: proto::PutRequest) -> Result<proto::PutResponse> {
         self.check_key(&req.key)?;
 
-        let replication_factor = self.config.cluster_config.replication_factor as usize;
-        let replicas: Vec<_> = self
-            .ring
-            .successors(&req.key)
-            .take(replication_factor)
-            .cloned()
-            .collect();
-
-        if replicas.len() < replication_factor {
-            return Err(Error::TooFewReplicas);
-        }
+        let replicas = self.find_replicas(&req.key)?;
 
         let mut results = Vec::new();
         for addr in replicas {
@@ -107,17 +97,7 @@ impl Server {
     pub async fn get(&self, req: proto::GetRequest) -> Result<proto::GetResponse> {
         self.check_key(&req.key)?;
 
-        let replication_factor = self.config.cluster_config.replication_factor as usize;
-        let replicas: Vec<_> = self
-            .ring
-            .successors(&req.key)
-            .take(replication_factor)
-            .cloned()
-            .collect();
-
-        if replicas.len() < replication_factor {
-            return Err(Error::TooFewReplicas);
-        }
+        let replicas = self.find_replicas(&req.key)?;
 
         let mut results = Vec::new();
         for addr in replicas {
@@ -163,13 +143,7 @@ impl Server {
     pub async fn delete(&self, req: proto::DeleteRequest) -> Result<proto::DeleteResponse> {
         self.check_key(&req.key)?;
 
-        let replication_factor = self.config.cluster_config.replication_factor as usize;
-        let replicas: Vec<_> = self
-            .ring
-            .successors(&req.key)
-            .take(replication_factor)
-            .cloned()
-            .collect();
+        let replicas = self.find_replicas(&req.key)?;
 
         let mut results = Vec::new();
         for addr in replicas {
@@ -262,6 +236,25 @@ impl Server {
         let mut client = PeerServiceClient::connect(addr).await?;
         let resp = client.direct_delete(req).await?;
         Ok(resp.into_inner())
+    }
+
+    fn find_replicas(&self, key: &Vec<u8>) -> Result<Vec<NodeAddr>> {
+        let replication_factor = self.config.cluster_config.replication_factor as usize;
+        let mut replicas = Vec::new();
+        let mut iter = self.ring.successors(key);
+        while let Some(addr) = iter.next() {
+            if replicas.contains(addr) {
+                continue;
+            }
+            replicas.push(addr.clone());
+            if replicas.len() == replication_factor {
+                break;
+            }
+        }
+        if replicas.len() < replication_factor {
+            return Err(Error::TooFewReplicas);
+        }
+        Ok(replicas)
     }
 
     fn check_key(&self, key: &Vec<u8>) -> Result<()> {
