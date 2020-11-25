@@ -8,11 +8,9 @@ use crate::{Key, Version};
 use log::trace;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::net::SocketAddr;
 use structopt::StructOpt;
 use tonic;
-
-// RKV node address. host:port
-pub type NodeAddr = String;
 
 #[derive(Debug, Clone, StructOpt)]
 pub struct Config {
@@ -20,10 +18,10 @@ pub struct Config {
     pub folder: PathBuf,
 
     #[structopt(short, long, default_value = "127.0.0.1:8080")]
-    pub address: NodeAddr,
+    pub address: SocketAddr,
 
     #[structopt(short, long, use_delimiter = true, default_value = "")]
-    pub seed_nodes: Vec<NodeAddr>,
+    pub seed_nodes: Vec<SocketAddr>,
 
     #[structopt(short, long, parse(try_from_str = parse_cluster_config), default_value = "")]
     pub cluster_config: ClusterConfig,
@@ -54,7 +52,7 @@ fn default_cluster_config() -> ClusterConfig {
 
 pub struct Server {
     config: Config,
-    ring: HashRing<NodeAddr>,
+    ring: HashRing<SocketAddr>,
     store: Box<dyn store::Store>,
 }
 
@@ -69,7 +67,7 @@ impl Server {
     }
 
     // TODO: Fetch peers from network
-    fn make_ring(config: &Config) -> HashRing<NodeAddr> {
+    fn make_ring(config: &Config) -> HashRing<SocketAddr> {
         let mut ring = HashRing::new(config.cluster_config.ring_replicas);
         ring.insert(config.address.clone());
         for peer in &config.seed_nodes {
@@ -218,47 +216,47 @@ impl Server {
 
     async fn remote_put(
         &self,
-        addr: NodeAddr,
+        addr: SocketAddr,
         req: proto::PutRequest,
     ) -> Result<proto::PutResponse> {
         if addr == self.config.address {
             return self.direct_put(req).await;
         }
 
-        let mut client = PeerServiceClient::connect(addr).await?;
+        let mut client = PeerServiceClient::connect(to_endpoint(&addr)).await?;
         let resp = client.direct_put(req).await?;
         Ok(resp.into_inner())
     }
 
     async fn remote_get(
         &self,
-        addr: NodeAddr,
+        addr: SocketAddr,
         req: proto::GetRequest,
     ) -> Result<proto::GetResponse> {
         if addr == self.config.address {
             return self.direct_get(req).await;
         }
 
-        let mut client = PeerServiceClient::connect(addr).await?;
+        let mut client = PeerServiceClient::connect(to_endpoint(&addr)).await?;
         let resp = client.direct_get(req).await?;
         Ok(resp.into_inner())
     }
 
     async fn remote_delete(
         &self,
-        addr: NodeAddr,
+        addr: SocketAddr,
         req: proto::DeleteRequest,
     ) -> Result<proto::DeleteResponse> {
         if addr == self.config.address {
             return self.direct_delete(req).await;
         }
 
-        let mut client = PeerServiceClient::connect(addr).await?;
+        let mut client = PeerServiceClient::connect(to_endpoint(&addr)).await?;
         let resp = client.direct_delete(req).await?;
         Ok(resp.into_inner())
     }
 
-    fn find_replicas(&self, key: &Vec<u8>) -> Result<Vec<NodeAddr>> {
+    fn find_replicas(&self, key: &Vec<u8>) -> Result<Vec<SocketAddr>> {
         let replication_factor = self.config.cluster_config.replication_factor as usize;
         let mut replicas = Vec::new();
         let mut iter = self.ring.successors(key);
@@ -284,4 +282,8 @@ impl Server {
             Ok(())
         }
     }
+}
+
+fn to_endpoint(addr: &SocketAddr) -> tonic::transport::Endpoint {
+   tonic::transport::Endpoint::from_shared(format!("http://{}", addr)).unwrap()
 }

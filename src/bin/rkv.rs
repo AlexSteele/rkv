@@ -13,7 +13,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap();
 
     let config = Config::parse_from_args();
-    let addr = config.address.parse()?;
+    let addr = config.address;
     let server = Arc::new(Server::new(config));
     let rkv_service = RkvService {
         server: server.clone(),
