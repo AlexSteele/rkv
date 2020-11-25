@@ -20,7 +20,7 @@ pub struct Config {
     #[structopt(short, long, default_value = "127.0.0.1:8080")]
     pub address: SocketAddr,
 
-    #[structopt(short, long, use_delimiter = true, default_value = "")]
+    #[structopt(short, long, use_delimiter = true)]
     pub seed_nodes: Vec<SocketAddr>,
 
     #[structopt(short, long, parse(try_from_str = parse_cluster_config), default_value = "")]
